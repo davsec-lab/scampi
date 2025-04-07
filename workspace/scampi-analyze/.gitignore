@@ -1,0 +1,9 @@
+# Rust
+target
+
+# MacOS
+.DS_Store
+
+# Specific to Whelk
+output
+.log
