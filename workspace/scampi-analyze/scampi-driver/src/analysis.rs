@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use rustc_abi::ExternAbi;
 use rustc_hir::def::{DefKind, Res};
 use rustc_hir::intravisit::{walk_expr, walk_item, Visitor};
 use rustc_hir::{Expr, ExprKind, ItemKind};
@@ -7,7 +8,6 @@ use rustc_middle::hir::nested_filter::OnlyBodies;
 use rustc_middle::query::queries::def_kind;
 use rustc_middle::query::Key;
 use rustc_middle::ty::{TyCtxt, TyKind};
-use rustc_abi::ExternAbi;
 
 use log::{debug, warn};
 
@@ -22,7 +22,7 @@ pub struct Analyzer<'tcx> {
     pub fns: HashMap<String, FnData>,
 
     /// List of invocations we find.
-    pub invocs: Vec<InvocData>
+    pub invocs: Vec<InvocData>,
 }
 
 impl<'tcx> Analyzer<'tcx> {
@@ -30,7 +30,7 @@ impl<'tcx> Analyzer<'tcx> {
         Self {
             tcx,
             fns: HashMap::new(),
-            invocs: Vec::new()
+            invocs: Vec::new(),
         }
     }
 
@@ -39,14 +39,14 @@ impl<'tcx> Analyzer<'tcx> {
         let owner_def_kind = self.tcx.def_kind(owner_id);
 
         if !owner_def_kind.is_fn_like() {
-            return
+            return;
         }
 
         let local_def_id = owner_id.to_def_id().as_local().unwrap();
 
         if let ExprKind::Path(qpath) = fun.kind {
             let typeck_results = self.tcx.typeck(local_def_id);
-        
+
             if let Res::Def(def_kind, def_id) = typeck_results.qpath_res(&qpath, fun.hir_id) {
                 if def_kind == DefKind::Fn {
                     let fn_name = self.tcx.def_path_str(def_id);
@@ -57,28 +57,26 @@ impl<'tcx> Analyzer<'tcx> {
                             TyKind::FnDef(..) => {
                                 let binder = ty.fn_sig(self.tcx);
                                 let fn_sig = binder.skip_binder();
-    
+
                                 if let ExternAbi::C { unwind: _ } = fn_sig.abi {
                                     let parameters = fn_sig
                                         .inputs()
                                         .iter()
-                                        .map(|ty| {
-                                            ParamData::new(ty)
-                                        })
+                                        .map(|ty| ParamData::new(ty))
                                         .collect();
-    
+
                                     self.fns
                                         .entry(fn_name.clone())
                                         .or_insert_with(|| FnData::new(parameters, fn_span));
-    
+
                                     self.invocs.push(InvocData::new(fn_name, fun.span));
                                 }
                             }
 
-                            _ => warn!("Function wasn't an `FnDef`")
-                        }
+                            _ => warn!("Function wasn't an `FnDef`"),
+                        },
 
-                        _ => warn!("Function cannot be typed")
+                        _ => warn!("Function cannot be typed"),
                     }
                 }
             }

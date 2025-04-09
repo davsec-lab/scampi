@@ -37,7 +37,7 @@ impl FnData {
     pub fn new(parameters: Vec<ParamData>, span: Span) -> Self {
         Self {
             parameters,
-            span: clean_span(span)
+            span: clean_span(span),
         }
     }
 }
