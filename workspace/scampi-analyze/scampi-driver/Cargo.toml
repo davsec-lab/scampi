@@ -9,6 +9,7 @@ rustc_private = true
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
+toml.workspace = true
 simplelog.workspace = true
 log.workspace = true
 

@@ -71,8 +71,8 @@ impl Args {
     }
 }
 
-pub fn initialize_logging(args: &Args) {
-    let log_level = env::var("SCAMPI_LOG_LEVEL").unwrap_or_else(|_| "OFF".to_string());
+pub fn initialize_logging(namespace: &Option<String>, crate_name: &str) {
+    let log_level = env::var("SCAMPI_LOG_LEVEL").unwrap_or_else(|_| "DEBUG".to_string());
 
     let level_filter = match log_level.as_str() {
         "DEBUG" => LevelFilter::Debug,
@@ -92,19 +92,19 @@ pub fn initialize_logging(args: &Args) {
     // Create logging directory if it doesn't already exist
     let log_dir = Path::new(root_dir).join(".log");
     fs::create_dir_all(&log_dir).expect(&format!(
-        "Failed to create Whelk logging directory at {}",
+        "Failed to create Scampi logging directory at {}",
         log_dir.display()
     ));
 
     // Create logging file
-    let path = log_dir.join(args.name_or("-")).with_extension("log");
+    let path = log_dir.join(format!("{crate_name}.log"));
     let log = OpenOptions::new()
         .write(true)
         .truncate(true)
         .create(true)
         .open(&path)
         .expect(&format!(
-            "Failed to create Whelk logging file at {}",
+            "Failed to create Scampi logging file at {}",
             path.display()
         ));
 
@@ -116,7 +116,7 @@ pub fn initialize_logging(args: &Args) {
         .build();
 
     WriteLogger::init(simplelog::LevelFilter::Debug, config, log)
-        .expect("Failed to initialize Whelk logger");
+        .expect("Failed to initialize Scampi logger");
 }
 
 pub fn path_expr_segments(expr: &rustc_hir::Expr<'_>) -> Vec<String> {

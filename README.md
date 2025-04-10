@@ -81,3 +81,27 @@ The code in `scampi-persist` is for storing the analysis results in a MongoDB da
 ## Examples
 ### Neon
 Neon is a tricky crate to build. If you follow their instructions, there is a good chance that eventually you will run out of RAM. That's okay, though - we don't need the build to succeed. We only need to run the build up to this point to generate some artifacts. After that, you can use `scampi` to analyze the workspace per usual.
+
+### Spacedrive
+Spacedrive is _also_ a tricky crate to build. For one, you need Node. Here is how you can install it.
+
+```
+# Download and install nvm:
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.2/install.sh | bash
+
+# in lieu of restarting the shell
+\. "$HOME/.nvm/nvm.sh"
+
+# Download and install Node.js:
+nvm install 23
+
+# Verify the Node.js version:
+node -v # Should print "v23.11.0".
+nvm current # Should print "v23.11.0".
+
+# Download and install pnpm:
+corepack enable pnpm
+
+# Verify pnpm version:
+pnpm -v
+```

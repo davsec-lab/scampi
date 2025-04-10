@@ -16,26 +16,11 @@ struct Args {
 fn main() {
     let args = Args::parse();
 
-    let out_path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("..")
-        .join("scampi-persist")
-        .join("data")
-        .join(args.name);
-
-    fs::create_dir_all(&out_path.join("functions")).expect(&format!(
-        "Failed to create {:?}",
-        &out_path.join("functions")
-    ));
-
-    fs::create_dir_all(&out_path.join("invocations"))
-        .expect("Failed to create invocation output path!");
-
     let mut command = Command::new("cargo")
         .arg("check")
         .arg("--keep-going")
         .env("RUSTC_WRAPPER", "scampi-driver")
-        .env("SCAMPI_OUT_DIR", out_path)
+        .env("SCAMPI_OUT_DIR", args.name)
         .env("SCAMPI_LOG_LEVEL", "DEBUG")
         .stdout(Stdio::piped())
         .spawn()

@@ -4,6 +4,6 @@ target
 # MacOS
 .DS_Store
 
-# Specific to Whelk
+# Specific to Scampi
 output
 .log
