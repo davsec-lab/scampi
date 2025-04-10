@@ -50,7 +50,7 @@ apt install \
 ```
 
 ### Building and Installing Scampi
-You cannot analyze any crates until Scampi has been built and installed. Running `cd crates/scampi-analyze` and then `./install.sh` should do the trick.
+You cannot analyze any crates until Scampi has been built and installed. Running `cd workspace/scampi-analyze` and then `./install.sh` should do the trick.
 
 ### Analyzing Crates
 Once you have cloned a crate, you are ready to analyze it. If the crate does not contain a file called `rust-toolchain.toml`, create one. Otherwise, make sure the value assigned to `channel` matches the one below.
@@ -66,11 +66,13 @@ Then, follow whatever instructions they provide to build the crate for the first
 Finally, you can analyze the crate using the `scampi` command.
 
 ```
-Usage: scampi [OPTIONS]
+Usage: scampi <NAME>
+
+Arguments:
+  <NAME>  The output directory
 
 Options:
-  -d, --directory <DIRECTORY>  The output directory
-  -h, --help 
+  -h, --help  Print help
 ```
 
 If the analysis completes successfully, you should be able to find the folders `<directory>/functions` and `<directory>/invocations` in `scampi-persist/data`.
