@@ -64,6 +64,7 @@ channel = "nightly-2025-02-19"
 Then, follow whatever instructions they provide to build the crate for the first time. This process often involves installing additional dependencies and generating bindings.
 
 Finally, you can analyze the crate using the `scampi` command.
+Provide it with a name for the output directory (this is a new folder name, it doesn't exist yet).
 
 ```
 Usage: scampi <NAME>
@@ -75,7 +76,7 @@ Options:
   -h, --help  Print help
 ```
 
-If the analysis completes successfully, you should be able to find the folders `<directory>/functions` and `<directory>/invocations` in `scampi-persist/data`.
+If the analysis completes successfully, you should be able to find the folders in the original `scampi` source code repository (not: in the current directory) `<directory>/functions` and `<directory>/invocations` in `scampi-persist/data`.
 
 ### Saving to MongoDB
 The code in `scampi-persist` is for storing the analysis results in a MongoDB database for easy analysis.
