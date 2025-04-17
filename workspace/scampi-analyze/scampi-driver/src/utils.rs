@@ -3,7 +3,6 @@ use std::path::Path;
 use std::{env, fs};
 
 use log::LevelFilter;
-use rustc_hir::{ExprKind, QPath};
 use simplelog::{ConfigBuilder, WriteLogger};
 
 #[derive(Debug)]
@@ -117,27 +116,4 @@ pub fn initialize_logging(namespace: &Option<String>, crate_name: &str) {
 
     WriteLogger::init(simplelog::LevelFilter::Debug, config, log)
         .expect("Failed to initialize Scampi logger");
-}
-
-pub fn path_expr_segments(expr: &rustc_hir::Expr<'_>) -> Vec<String> {
-    if let ExprKind::Path(qpath) = expr.kind {
-        match qpath {
-            QPath::Resolved(_, path) => path
-                .segments
-                .iter()
-                .map(|seg| seg.ident.to_string())
-                .collect(),
-            QPath::TypeRelative(ty, segment) => {
-                let ty = format!("{:?}", ty);
-                let ident = segment.ident.to_string();
-
-                vec![ty, ident]
-            }
-            QPath::LangItem(lang_item, ..) => {
-                vec![format!("{:?}", lang_item)]
-            }
-        }
-    } else {
-        vec![]
-    }
 }

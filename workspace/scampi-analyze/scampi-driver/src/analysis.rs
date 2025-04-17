@@ -2,17 +2,14 @@ use std::collections::HashMap;
 
 use rustc_abi::ExternAbi;
 use rustc_hir::def::{DefKind, Res};
-use rustc_hir::intravisit::{walk_expr, walk_item, Visitor};
-use rustc_hir::{Expr, ExprKind, ItemKind};
+use rustc_hir::intravisit::{walk_expr, Visitor};
+use rustc_hir::{Expr, ExprKind};
 use rustc_middle::hir::nested_filter::OnlyBodies;
-use rustc_middle::query::queries::def_kind;
-use rustc_middle::query::Key;
 use rustc_middle::ty::{TyCtxt, TyKind};
 
-use log::{debug, warn};
+use log::warn;
 
 use crate::data::{FnData, InvocData, ParamData};
-use crate::utils::path_expr_segments;
 
 pub struct Analyzer<'tcx> {
     /// The type context.

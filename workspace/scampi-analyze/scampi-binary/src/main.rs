@@ -1,11 +1,9 @@
 use std::{
-    fs,
     io::{BufRead, BufReader},
-    path::{Path, PathBuf},
     process::{Command, Stdio},
 };
 
-use clap::{Arg, Parser};
+use clap::Parser;
 
 #[derive(Parser)]
 struct Args {
