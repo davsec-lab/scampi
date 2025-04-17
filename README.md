@@ -50,7 +50,7 @@ apt install \
 ```
 
 ### Building and Installing Scampi
-You cannot analyze any crates until Scampi has been built and installed. Running `cd crates/scampi-analyze` and then `./install.sh` should do the trick.
+You cannot analyze any crates until Scampi has been built and installed. Running `cd workspace/scampi-analyze` and then `./install.sh` should do the trick.
 
 ### Analyzing Crates
 Once you have cloned a crate, you are ready to analyze it. If the crate does not contain a file called `rust-toolchain.toml`, create one. Otherwise, make sure the value assigned to `channel` matches the one below.
@@ -64,16 +64,19 @@ channel = "nightly-2025-02-19"
 Then, follow whatever instructions they provide to build the crate for the first time. This process often involves installing additional dependencies and generating bindings.
 
 Finally, you can analyze the crate using the `scampi` command.
+Provide it with a name for the output directory (this is a new folder name, it doesn't exist yet).
 
 ```
-Usage: scampi [OPTIONS]
+Usage: scampi <NAME>
+
+Arguments:
+  <NAME>  The output directory
 
 Options:
-  -d, --directory <DIRECTORY>  The output directory
-  -h, --help 
+  -h, --help  Print help
 ```
 
-If the analysis completes successfully, you should be able to find the folders `<directory>/functions` and `<directory>/invocations` in `scampi-persist/data`.
+If the analysis completes successfully, you should be able to find the folders in the original `scampi` source code repository (not: in the current directory) `<directory>/functions` and `<directory>/invocations` in `scampi-persist/data`.
 
 ### Saving to MongoDB
 The code in `scampi-persist` is for storing the analysis results in a MongoDB database for easy analysis.
