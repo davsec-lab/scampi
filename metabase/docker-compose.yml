@@ -1,0 +1,5 @@
+services:
+  mb-arm:
+    image: metabase-arm 
+    ports:
+      - "${PORT:-3000}:${PORT:-3000}"

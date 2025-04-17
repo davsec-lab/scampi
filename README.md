@@ -22,6 +22,12 @@ If you exited the container and would like to pick up where you left off, use th
 docker start -i scampi
 ```
 
+If you're already started the container and would like to interact with the shell in another terminal, use `exec`.
+
+```
+docker exec -it scampi bash
+```
+
 ### Installing Crates
 Scampi analyzes C usage in Rust code, so the crates you plan on analyzing will most likely require all kinds of additional libraries. For example, to build `neon` you must install the packages below.
 
@@ -63,30 +69,26 @@ channel = "nightly-2025-02-19"
 
 Then, follow whatever instructions they provide to build the crate for the first time. This process often involves installing additional dependencies and generating bindings.
 
-Finally, you can analyze the crate using the `scampi` command.
-Provide it with a name for the output directory (this is a new folder name, it doesn't exist yet).
+Finally, you can analyze the crate using the `scampi` command. If you want the results to be output in JSON format, provide an output directory relative to your current one using the `-o` flag. If you would like your results to be saved in a MongoDB database, you can also specify the connection string and database name using the `-u` and `-d` flags, respectively.
+
+You can save the results to an output directory and MongoDB, just one of the two, or neither. If you don't provide any flags, the analysis will be performed as usual but the results will be inaccessible.
 
 ```
-Usage: scampi <NAME>
-
-Arguments:
-  <NAME>  The output directory
+Usage: scampi [OPTIONS]
 
 Options:
-  -h, --help  Print help
+  -o, --out-dir <DIRECTORY>       The JSON output directory
+  -u, --uri-mongo <INSTANCE URI>  The MongoDB connection string
+  -d, --db-mongo <DATABASE NAME>  The MongoDB database
+  -h, --help                      Print help
 ```
-
-If the analysis completes successfully, you should be able to find the folders in the original `scampi` source code repository (not: in the current directory) `<directory>/functions` and `<directory>/invocations` in `scampi-persist/data`.
-
-### Saving to MongoDB
-The code in `scampi-persist` is for storing the analysis results in a MongoDB database for easy analysis.
 
 ## Examples
 ### Neon
 Neon is a tricky crate to build. If you follow their instructions, there is a good chance that eventually you will run out of RAM. That's okay, though - we don't need the build to succeed. We only need to run the build up to this point to generate some artifacts. After that, you can use `scampi` to analyze the workspace per usual.
 
 ### Spacedrive
-Spacedrive is _also_ a tricky crate to build. For one, you need Node. Here is how you can install it.
+Spacedrive is also a tricky crate to build. For one, you need Node. Here is how you can install it.
 
 ```
 # Download and install nvm:

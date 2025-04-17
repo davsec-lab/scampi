@@ -1,5 +1,0 @@
-CONNECTION_STRING = "mongodb://localhost:27017"
-DB_NAME = "scampi-ubuntu"
-CRATE_COLL_NAME = "crates"
-FN_COLL_NAME = "functions"
-INVOC_COLL_NAME = "invocations"
