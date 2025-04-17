@@ -9,19 +9,41 @@ use clap::{Arg, Parser};
 
 #[derive(Parser)]
 struct Args {
-    /// The output directory.
-    name: String,
+    /// The JSON output directory.
+    #[arg(short, long, value_name = "DIRECTORY")]
+    out_dir: Option<String>,
+
+    /// The MongoDB connection string.
+    #[arg(short, long, value_name = "INSTANCE URI")]
+    uri_mongo: Option<String>,
+
+    /// The MongoDB database.
+    #[arg(short, long, value_name = "DATABASE NAME")]
+    db_mongo: Option<String>,
 }
 
 fn main() {
     let args = Args::parse();
 
+    let mut vars = vec![("SCAMPI_LOG_LEVEL", "DEBUG")];
+
+    if let Some(out_dir) = &args.out_dir {
+        vars.push(("SCAMPI_OUT_DIR", out_dir));
+    }
+
+    if let Some(uri_mongo) = &args.uri_mongo {
+        vars.push(("SCAMPI_MONGO_URI", uri_mongo));
+    }
+
+    if let Some(db_mongo) = &args.db_mongo {
+        vars.push(("SCAMPI_MONGO_DB", db_mongo));
+    }
+
     let mut command = Command::new("cargo")
         .arg("check")
         .arg("--keep-going")
         .env("RUSTC_WRAPPER", "scampi-driver")
-        .env("SCAMPI_OUT_DIR", args.name)
-        .env("SCAMPI_LOG_LEVEL", "DEBUG")
+        .envs(vars)
         .stdout(Stdio::piped())
         .spawn()
         .unwrap();

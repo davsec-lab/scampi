@@ -11,25 +11,141 @@ extern crate rustc_target;
 extern crate rustc_type_ir;
 
 mod analysis;
+mod data;
 mod utils;
-use log::debug;
+
+use log::{debug, warn};
+use mongodb::bson::{self, doc, Document};
+use mongodb::sync::{Client, Collection};
 use toml::Table;
 use utils::{initialize_logging, Args};
-mod data;
 
 use rustc_driver::{run_compiler, Callbacks};
 
 use std::fs::OpenOptions;
 use std::io::Write;
-use std::os::unix;
-use std::path::Path;
+use std::path::PathBuf;
 use std::{env, fs};
 
 use analysis::Analyzer;
 
+struct MongoConfig {
+    uri: String,
+    db: String,
+}
+
 struct AnalysisCallback {
+    mongo_config: Option<MongoConfig>,
+    output_dir: Option<PathBuf>,
     namespace: Option<String>,
-    crate_name: String
+    crate_name: String,
+}
+
+impl AnalysisCallback {
+    fn output_json(&self, analyzer: &Analyzer) {
+        let Some(mut out_dir) = self.output_dir.clone() else {
+            warn!("Output (JSON) configuration was not provided!");
+            return;
+        };
+
+        if let Some(ns) = &self.namespace {
+            out_dir.push(ns);
+        }
+
+        out_dir.push(&self.crate_name);
+
+        let fn_out_path = out_dir.join("functions.json");
+        let invoc_out_path = out_dir.join("invocations.json");
+
+        fs::create_dir_all(&out_dir).expect(&format!("Failed to create {:?}", out_dir));
+
+        let fn_out_string =
+            serde_json::to_string_pretty(&analyzer.fns).expect("Failed to serialize function map");
+
+        let invoc_out_string = serde_json::to_string_pretty(&analyzer.invocs)
+            .expect("Failed to serialize invocation list");
+
+        let mut fn_out_file = OpenOptions::new()
+            .write(true)
+            .truncate(true)
+            .create(true)
+            .open(&fn_out_path)
+            .expect(&format!("Failed to create {:?}", fn_out_path));
+
+        let mut invoc_out_file = OpenOptions::new()
+            .write(true)
+            .truncate(true)
+            .create(true)
+            .open(&invoc_out_path)
+            .expect(&format!("Failed to create {:?}", invoc_out_path));
+
+        fn_out_file
+            .write_all(fn_out_string.as_bytes())
+            .expect("Failed to write to function output file!");
+
+        invoc_out_file
+            .write_all(invoc_out_string.as_bytes())
+            .expect("Failed to write to invocation output file!");
+    }
+
+    fn output_mongodb(&self, analyzer: &Analyzer) {
+        let Some(config) = &self.mongo_config else {
+            warn!("Output (MongoDB) configuration was not provided!");
+            return;
+        };
+
+        let client = Client::with_uri_str(&config.uri).unwrap();
+        let db = client.database(&config.db);
+
+        let crates_collection: Collection<Document> = db.collection("crates");
+        let fns_collection: Collection<Document> = db.collection("functions");
+        let invocs_collection: Collection<Document> = db.collection("invocations");
+
+        // Upsert this crate to the `crates` collection
+        let crate_name = if let Some(namespace) = &self.namespace {
+            format!("{namespace}/{}", self.crate_name)
+        } else {
+            self.crate_name.to_owned()
+        };
+
+        let query = doc! {
+            "name": crate_name
+        };
+
+        let update = doc! {
+            "$set": query.clone()
+        };
+
+        let _ = crates_collection
+            .update_one(query, update)
+            .upsert(true)
+            .run();
+
+        // Upsert every function we encountered to the `functions` collection
+        for (fn_name, fn_data) in &analyzer.fns {
+            let mut query = bson::to_document(fn_data).unwrap();
+            query.insert("name", fn_name);
+
+            let update = doc! {
+                "$set": query.clone()
+            };
+
+            let _ = fns_collection.update_one(query, update).upsert(true).run();
+        }
+
+        // Upsert every invocation we encountered to the `invocations` collection
+        for invoc in &analyzer.invocs {
+            let query = bson::to_document(invoc).unwrap();
+            let update = doc! {
+                "$set": query.clone()
+            };
+
+            let _ = invocs_collection
+                .update_one(query, update)
+                .upsert(true)
+                .run();
+        }
+    }
 }
 
 impl Callbacks for AnalysisCallback {
@@ -45,69 +161,8 @@ impl Callbacks for AnalysisCallback {
 
             tcx.hir_visit_all_item_likes_in_crate(&mut analyzer);
 
-            let mut out_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("..")
-                .join("..")
-                .join("scampi-persist")
-                .join("data");
-
-            if let Some(ns) = &self.namespace {
-                out_dir.push(ns);
-            }
-
-            if let Ok(out) = std::env::var("SCAMPI_OUT_DIR") {
-                out_dir.push(out);
-            } else if let Ok(true) = fs::exists("scampi.toml") {
-                let raw = fs::read_to_string("scampi.toml").expect("Could not read manifest");
-                let table = raw.parse::<Table>().unwrap();
-
-                if let Some(out) = table.get("out") {
-                    out_dir.push(out.as_str().expect("Output directory must be a string"));
-                } else {
-                    out_dir.push(&self.crate_name);
-                }
-            } else {
-                out_dir.push(&self.crate_name);
-            }
-
-            let fn_out_path = Path::new(&out_dir).join("functions.json");
-            let invoc_out_path = Path::new(&out_dir).join("invocations.json");
-
-            fs::create_dir_all(&out_dir).expect(&format!("Failed to create {:?}", out_dir));
-
-            debug!("Crate name: {}", self.crate_name);
-            debug!("Namespace: {:?}", self.namespace);
-            debug!("Out dir: {:?}", out_dir);
-            debug!("Fn out path: {:?}", fn_out_path);
-            debug!("Invoc out path: {:?}", invoc_out_path);
-
-            let fn_out_string = serde_json::to_string_pretty(&analyzer.fns)
-                .expect("Failed to serialize function map");
-
-            let invoc_out_string = serde_json::to_string_pretty(&analyzer.invocs)
-                .expect("Failed to serialize invocation list");
-
-            let mut fn_out_file = OpenOptions::new()
-                .write(true)
-                .truncate(true)
-                .create(true)
-                .open(&fn_out_path)
-                .expect(&format!("Failed to create {:?}", fn_out_path));
-
-            let mut invoc_out_file = OpenOptions::new()
-                .write(true)
-                .truncate(true)
-                .create(true)
-                .open(&invoc_out_path)
-                .expect(&format!("Failed to create {:?}", invoc_out_path));
-
-            fn_out_file
-                .write_all(fn_out_string.as_bytes())
-                .expect("Failed to write to function output file!");
-
-            invoc_out_file
-                .write_all(invoc_out_string.as_bytes())
-                .expect("Failed to write to invocation output file!");
+            self.output_json(&analyzer);
+            self.output_mongodb(&analyzer);
         }
 
         rustc_driver::Compilation::Continue
@@ -139,11 +194,22 @@ fn main() {
     // Initialize logging
     initialize_logging(&namespace, &crate_name);
 
-    // Run the compiler
-    let mut callbacks = AnalysisCallback {
-        namespace,
-        crate_name
+    let uri = std::env::var("SCAMPI_MONGO_URI");
+    let db = std::env::var("SCAMPI_MONGO_DB");
+    let out = std::env::var("SCAMPI_OUT_DIR");
+
+    let mongo_config = match (uri, db) {
+        (Ok(uri), Ok(db)) => Some(MongoConfig { uri, db }),
+        _ => None,
     };
 
-    let _result = run_compiler(&raw_args, &mut callbacks);
+    // Run the compiler
+    let mut callbacks = AnalysisCallback {
+        mongo_config,
+        output_dir: out.map_or(None, |out| Some(PathBuf::from(out))),
+        namespace,
+        crate_name,
+    };
+
+    let _ = run_compiler(&raw_args, &mut callbacks);
 }

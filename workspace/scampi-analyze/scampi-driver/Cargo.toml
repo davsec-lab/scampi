@@ -13,3 +13,4 @@ toml.workspace = true
 simplelog.workspace = true
 log.workspace = true
 
+mongodb = { version = "3.2.3", features = ["sync"] }
