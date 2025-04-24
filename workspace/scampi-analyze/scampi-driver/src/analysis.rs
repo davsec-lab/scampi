@@ -20,14 +20,22 @@ pub struct Analyzer<'tcx> {
 
     /// List of invocations we find.
     pub invocs: Vec<InvocData>,
+
+    // The name of the current workspace.
+    pub workspace: Option<String>,
+
+    // The name of the current crate.
+    pub crate_name: String,
 }
 
 impl<'tcx> Analyzer<'tcx> {
-    pub fn new(tcx: TyCtxt<'tcx>) -> Self {
+    pub fn new(tcx: TyCtxt<'tcx>, workspace: Option<String>, crate_name: String) -> Self {
         Self {
             tcx,
             fns: HashMap::new(),
             invocs: Vec::new(),
+            workspace,
+            crate_name,
         }
     }
 
@@ -62,11 +70,19 @@ impl<'tcx> Analyzer<'tcx> {
                                         .map(|ty| ParamData::new(ty))
                                         .collect();
 
-                                    self.fns
-                                        .entry(fn_name.clone())
-                                        .or_insert_with(|| FnData::new(parameters, fn_span));
+                                    let source_crate =
+                                        self.tcx.crate_name(def_id.krate).to_string();
 
-                                    self.invocs.push(InvocData::new(fn_name, fun.span));
+                                    self.fns.entry(fn_name.clone()).or_insert_with(|| {
+                                        FnData::new(parameters, fn_span, source_crate)
+                                    });
+
+                                    self.invocs.push(InvocData::new(
+                                        fn_name,
+                                        fun.span,
+                                        self.workspace.clone(),
+                                        self.crate_name.clone(),
+                                    ));
                                 }
                             }
 
@@ -78,54 +94,6 @@ impl<'tcx> Analyzer<'tcx> {
                 }
             }
         }
-
-        // let name = path_expr_segments(fun);
-
-        // if name.is_empty() || name[0] == "libc" {
-        //     return;
-        // }
-
-        // let owner_id = fun.hir_id.owner;
-        // let owner_def_kind = self.tcx.def_kind(owner_id);
-
-        // match owner_def_kind {
-        //     DefKind::Fn | DefKind::AssocFn | DefKind::Closure => {
-        //         let typeck_results = self.tcx.typeck(owner_id);
-
-        //         match typeck_results.expr_ty_opt(fun) {
-        //             Some(ty) => match ty.kind() {
-        //                 TyKind::FnDef(..) | TyKind::FnPtr(..) => {
-        //                     let binder = ty.fn_sig(self.tcx);
-        //                     let fn_sig = binder.skip_binder();
-
-        //                     if let Abi::C { unwind: _ } = fn_sig.abi {
-        //                         let parameters = fn_sig
-        //                             .inputs()
-        //                             .iter()
-        //                             .map(|ty| {
-        //                                 ParamData::new(ty)
-        //                                     .with_property("is_mutable_ptr", ty.is_mutable_ptr())
-        //                                     .with_property("is_unsafe_ptr", ty.is_unsafe_ptr())
-        //                                     .with_property("is_any_ptr", ty.is_any_ptr())
-        //                             })
-        //                             .collect();
-
-        //                         self.fns
-        //                             .entry(name.join("::"))
-        //                             .or_insert_with(|| FnData::new(parameters));
-
-        //                         self.invocs.push(InvocData::new(name.join("::"), fun.span));
-        //                     }
-        //                 }
-
-        //                 _ => warn!("Function wasn't an `FnDef` or an `FnPtr`"),
-        //             },
-
-        //             _ => warn!("Function cannot be typed."),
-        //         }
-        //     }
-        //     _ => {}
-        // }
     }
 }
 

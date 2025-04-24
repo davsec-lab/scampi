@@ -13,6 +13,10 @@ pub struct FnData {
 
     /// The place where this function is defined.
     span: String,
+
+    /// The crate in which this function is defined
+    #[serde(rename(serialize = "crate"))]
+    crate_name: String,
 }
 
 /// Consolidates information about a function parameter.
@@ -32,24 +36,26 @@ pub struct InvocData {
 
     /// The place where this invocation occurs.
     span: String,
+
+    /// The workspace in which this invocation occurs.
+    workspace: Option<String>,
+
+    /// The crate in which this invocation occurs.
+    #[serde(rename(serialize = "crate"))]
+    crate_name: String,
 }
 
 impl FnData {
-    pub fn new(parameters: Vec<ParamData>, span: Span) -> Self {
+    pub fn new(parameters: Vec<ParamData>, span: Span, crate_name: String) -> Self {
         Self {
             parameters,
             span: clean_span(span),
+            crate_name,
         }
     }
-
-    // pub fn new(parameters: Vec<ParamData>, span: String) -> Self {
-    //     Self {
-    //         parameters,
-    //         span
-    //     }
-    // }
 }
 
+#[allow(dead_code)]
 impl ParamData {
     pub fn new(ty: &Ty) -> Self {
         Self {
@@ -65,10 +71,17 @@ impl ParamData {
 }
 
 impl InvocData {
-    pub fn new(function: String, source: Span) -> Self {
+    pub fn new(
+        function: String,
+        source: Span,
+        workspace: Option<String>,
+        crate_name: String,
+    ) -> Self {
         Self {
             function,
             span: clean_span(source),
+            workspace,
+            crate_name,
         }
     }
 }

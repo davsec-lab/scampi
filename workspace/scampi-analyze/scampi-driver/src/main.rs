@@ -14,7 +14,7 @@ mod analysis;
 mod data;
 mod utils;
 
-use log::{debug, warn};
+use log::warn;
 use mongodb::bson::{self, doc, Document};
 use mongodb::sync::{Client, Collection};
 use toml::Table;
@@ -37,7 +37,7 @@ struct MongoConfig {
 struct AnalysisCallback {
     mongo_config: Option<MongoConfig>,
     output_dir: Option<PathBuf>,
-    namespace: Option<String>,
+    workspace: Option<String>,
     crate_name: String,
 }
 
@@ -48,7 +48,7 @@ impl AnalysisCallback {
             return;
         };
 
-        if let Some(ns) = &self.namespace {
+        if let Some(ns) = &self.workspace {
             out_dir.push(ns);
         }
 
@@ -102,14 +102,9 @@ impl AnalysisCallback {
         let invocs_collection: Collection<Document> = db.collection("invocations");
 
         // Upsert this crate to the `crates` collection
-        let crate_name = if let Some(namespace) = &self.namespace {
-            format!("{namespace}/{}", self.crate_name)
-        } else {
-            self.crate_name.to_owned()
-        };
-
         let query = doc! {
-            "name": crate_name
+            "workspace": self.workspace.clone(),
+            "name": self.crate_name.clone()
         };
 
         let update = doc! {
@@ -157,7 +152,7 @@ impl Callbacks for AnalysisCallback {
         let skip = ["tokio", "time", "rustix", "parquet"];
 
         if !skip.contains(&self.crate_name.as_ref()) {
-            let mut analyzer = Analyzer::new(tcx);
+            let mut analyzer = Analyzer::new(tcx, self.workspace.clone(), self.crate_name.clone());
 
             tcx.hir_visit_all_item_likes_in_crate(&mut analyzer);
 
@@ -178,12 +173,16 @@ fn main() {
 
     let crate_name = args.name_or("-");
 
-    let namespace = if let Ok(true) = fs::exists("scampi.toml") {
-        let raw = fs::read_to_string("scampi.toml").expect("Could not read manifest!");
+    let workspace = if let Ok(true) = fs::exists("scampi.toml") {
+        let raw = fs::read_to_string("scampi.toml").expect("Could not read Cargo manifest");
         let table = raw.parse::<Table>().unwrap();
 
-        if let Some(namespace) = table["namespace"].as_str() {
-            Some(String::from(namespace))
+        if let Some(entry) = table.get("workspace") {
+            if let Some(workspace) = entry.as_str() {
+                Some(String::from(workspace))
+            } else {
+                None
+            }
         } else {
             None
         }
@@ -192,7 +191,7 @@ fn main() {
     };
 
     // Initialize logging
-    initialize_logging(&namespace, &crate_name);
+    initialize_logging(&crate_name);
 
     let uri = std::env::var("SCAMPI_MONGO_URI");
     let db = std::env::var("SCAMPI_MONGO_DB");
@@ -207,7 +206,7 @@ fn main() {
     let mut callbacks = AnalysisCallback {
         mongo_config,
         output_dir: out.map_or(None, |out| Some(PathBuf::from(out))),
-        namespace,
+        workspace,
         crate_name,
     };
 

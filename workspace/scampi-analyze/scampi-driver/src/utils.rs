@@ -12,6 +12,7 @@ pub enum CrateKind {
 }
 
 /// Arguments passed to `rustc` from Cargo.
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct Args {
     /// Name of the crate being compiled.
@@ -70,7 +71,7 @@ impl Args {
     }
 }
 
-pub fn initialize_logging(namespace: &Option<String>, crate_name: &str) {
+pub fn initialize_logging(crate_name: &str) {
     let log_level = env::var("SCAMPI_LOG_LEVEL").unwrap_or_else(|_| "DEBUG".to_string());
 
     let level_filter = match log_level.as_str() {
