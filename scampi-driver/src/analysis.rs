@@ -1,4 +1,4 @@
-use neo4rs::{query, Graph, Node};
+use neo4rs::{query, Graph, Query};
 use rustc_abi::ExternAbi;
 use rustc_hir::def::{DefKind, Res};
 use rustc_hir::intravisit::{walk_expr, walk_impl_item, walk_item, Visitor};
@@ -10,7 +10,7 @@ use log::{debug, warn};
 use rustc_span::Span;
 use tokio::runtime::Runtime;
 
-use crate::data::clean_span;
+use crate::data::{clean_span, ParamData};
 
 struct FunSig {
     krate: String,
@@ -18,7 +18,7 @@ struct FunSig {
     span: Span,
     abi: ExternAbi,
     safe: bool,
-    params: Vec<String>,
+    params: Vec<ParamData>,
 }
 
 pub struct Analyzer<'tcx> {
@@ -59,33 +59,57 @@ impl<'tcx> Analyzer<'tcx> {
         }
     }
 
-    fn register_fn(&mut self, fn_sig: FunSig) -> Node {
+    fn run_blocking_query(&mut self, query: Query) {
+        self.rt
+            .block_on(async {
+                self.graph
+                    .execute(query)
+                    .await
+                    .unwrap()
+                    .next()
+                    .await
+                    .unwrap()
+            })
+            .unwrap();
+    }
+
+    fn register_fn(&mut self, fn_sig: FunSig) {
         let abi = match fn_sig.abi {
             ExternAbi::Rust => "Rust",
             ExternAbi::C { unwind: _ } => "C",
             _ => "Other",
         };
 
-        let mut result = self
-            .rt
-            .block_on(async {
-                self.graph
-                    .execute(
-                        query(&format!(
-                            "MERGE (f:Fn:{abi} {{name: $name, crate: $crate, safe: $safe, span: $span, params: $params}}) RETURN f"
-                        ))
-                        .param("name", fn_sig.name)
-                        .param("crate", fn_sig.krate)
-                        .param("safe", fn_sig.safe)
-                        .param("span", clean_span(fn_sig.span))
-                        .param("params", fn_sig.params)
-                    )
-                    .await
-            })
-            .unwrap();
+        let fn_query = query(&format!(
+            "MERGE (f:Fn:{abi} {{name: $name, crate: $crate, safe: $safe, span: $span}}) RETURN f"
+        ))
+        .param("name", fn_sig.name.clone())
+        .param("crate", fn_sig.krate.clone())
+        .param("safe", fn_sig.safe)
+        .param("span", clean_span(fn_sig.span));
 
-        self.rt
-            .block_on(async { result.next().await.unwrap().unwrap().get("f").unwrap() })
+        self.run_blocking_query(fn_query);
+
+        for (i, param) in fn_sig.params.iter().enumerate() {
+            let param_query =
+                query("MERGE (p:Param { ty: $ty, is_mutable_ptr: $is_mutable_ptr }) RETURN p")
+                    .param("ty", param.ty.clone())
+                    .param("is_mutable_ptr", param.is_mutable_ptr);
+
+            self.run_blocking_query(param_query);
+
+            let accepts_query = query(
+                "MATCH (f:Fn), (p:Param) \
+                    WHERE f.name = $fn_name AND p.ty = $ty \
+                    MERGE (f)-[r:ACCEPTS { i: $i }]->(p) \
+                    RETURN r",
+            )
+            .param("fn_name", fn_sig.name.clone())
+            .param("ty", param.ty.clone())
+            .param("i", i as i32);
+
+            self.run_blocking_query(accepts_query);
+        }
     }
 
     fn visit_expr_call(&mut self, fun: &Expr, _args: &[Expr]) -> () {
@@ -117,8 +141,11 @@ impl<'tcx> Analyzer<'tcx> {
                                     return;
                                 }
 
-                                let params: Vec<String> =
-                                    fn_sig.inputs().iter().map(|ty| ty.to_string()).collect();
+                                let params: Vec<ParamData> = fn_sig
+                                    .inputs()
+                                    .iter()
+                                    .map(|ty| ParamData::new(ty))
+                                    .collect();
 
                                 let fun_sig = FunSig {
                                     krate: self.tcx.crate_name(def_id.krate).to_string(),
@@ -187,11 +214,17 @@ impl<'tcx> Visitor<'tcx> for Analyzer<'tcx> {
                 let fn_name = self.tcx.def_path_str(def_id);
                 let fn_span = self.tcx.def_span(def_id);
 
-                let params: Vec<String> = sig
+                let params: Vec<ParamData> = sig
                     .decl
                     .inputs
                     .iter()
-                    .map(|ty| format!("{:?}", ty))
+                    .map(|hir_ty| {
+                        let ty = self
+                            .tcx
+                            .type_of(hir_ty.hir_id.owner.to_def_id())
+                            .skip_binder();
+                        ParamData::new(&ty)
+                    })
                     .collect();
 
                 let fun_sig = FunSig {
@@ -223,11 +256,17 @@ impl<'tcx> Visitor<'tcx> for Analyzer<'tcx> {
                 let fn_name = self.tcx.def_path_str(def_id);
                 let fn_span = self.tcx.def_span(def_id);
 
-                let params: Vec<String> = sig
+                let params: Vec<ParamData> = sig
                     .decl
                     .inputs
                     .iter()
-                    .map(|ty| format!("{:?}", ty))
+                    .map(|hir_ty| {
+                        let ty = self
+                            .tcx
+                            .type_of(hir_ty.hir_id.owner.to_def_id())
+                            .skip_binder();
+                        ParamData::new(&ty)
+                    })
                     .collect();
 
                 let fun_sig = FunSig {

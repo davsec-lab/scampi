@@ -1,4 +1,24 @@
 use log::warn;
+use rustc_middle::ty::Ty;
+use serde::Serialize;
+
+/// Consolidates information about a function parameter.
+#[derive(Serialize)]
+pub struct ParamData {
+    /// The type of this parameter.
+    pub ty: String,
+
+    pub is_mutable_ptr: bool,
+}
+
+impl ParamData {
+    pub fn new(ty: &Ty) -> Self {
+        Self {
+            ty: format!("{:?}", ty),
+            is_mutable_ptr: ty.is_mutable_ptr(),
+        }
+    }
+}
 
 pub fn clean_span(span: rustc_span::Span) -> String {
     let mut span_string = format!("{:?}", span);
