@@ -72,7 +72,7 @@ impl Args {
 }
 
 pub fn initialize_logging(crate_name: &str) {
-    let log_level = env::var("SCAMPI_LOG_LEVEL").unwrap_or_else(|_| "DEBUG".to_string());
+    let log_level = env::var("SCAMPI_LOG_LEVEL").unwrap_or_else(|_| "OFF".to_string());
 
     let level_filter = match log_level.as_str() {
         "DEBUG" => LevelFilter::Debug,

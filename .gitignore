@@ -1,5 +1,4 @@
 .DS_Store
-workspace/crates/*
-__pycache__
-.pnpm-store
 .vscode
+target
+.log

@@ -7,35 +7,23 @@ use clap::Parser;
 
 #[derive(Parser)]
 struct Args {
-    /// The JSON output directory.
-    #[arg(short, long, value_name = "DIRECTORY")]
-    out_dir: Option<String>,
+    /// The Neo4j connection string.
+    #[arg(short, long, value_name = "Neo4j URI")]
+    uri: String,
 
-    /// The MongoDB connection string.
-    #[arg(short, long, value_name = "INSTANCE URI")]
-    uri_mongo: Option<String>,
-
-    /// The MongoDB database.
-    #[arg(short, long, value_name = "DATABASE NAME")]
-    db_mongo: Option<String>,
+    /// The Neo4j password.
+    #[arg(short, long, value_name = "Neo4j password")]
+    password: String,
 }
 
 fn main() {
     let args = Args::parse();
 
-    let mut vars = vec![("SCAMPI_LOG_LEVEL", "DEBUG")];
-
-    if let Some(out_dir) = &args.out_dir {
-        vars.push(("SCAMPI_OUT_DIR", out_dir));
-    }
-
-    if let Some(uri_mongo) = &args.uri_mongo {
-        vars.push(("SCAMPI_MONGO_URI", uri_mongo));
-    }
-
-    if let Some(db_mongo) = &args.db_mongo {
-        vars.push(("SCAMPI_MONGO_DB", db_mongo));
-    }
+    let vars = vec![
+        ("SCAMPI_LOG_LEVEL", "DEBUG"),
+        ("SCAMPI_NEO4J_URI", &args.uri),
+        ("SCAMPI_NEO4J_PASSWORD", &args.password),
+    ];
 
     let mut command = Command::new("cargo")
         .arg("check")

@@ -3,6 +3,18 @@
 </div>
 
 ## Getting Started
+
+### Usage
+```
+scampi --help
+Usage: scampi --uri <Neo4j URI> --password <Neo4j password>
+
+Options:
+  -u, --uri <Neo4j URI>            The Neo4j connection string
+  -p, --password <Neo4j password>  The Neo4j password
+  -h, --help                       Print help
+```
+
 ### Using Docker
 If you want to analyze crates on your own system, you can skip this step. Otherwise, start by building the Scampi image.
 
