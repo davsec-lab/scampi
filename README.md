@@ -13,6 +13,22 @@ git clone https://github.com/davsec-lab/scampi.git
 
 Then, `cd` into the root directory and run `install.sh`, the installation script.
 
+### Database Setup
+
+It doesn't matter where your Neo4j database is running - Scampi only needs the URI and password. However, a great way to start is running it locally using Docker.
+
+```
+docker run \
+    --restart always \
+    --publish=7474:7474 --publish=7687:7687 \
+    neo4j:2025.07.0
+```
+
+Once the container is up, visit `http://localhost:7474`. Right now, the default user is `neo4j` and so is the password. After signing in for the first time, you will be prompted to reset your password. Remember it!
+
+Read [this](https://neo4j.com/docs/operations-manual/current/docker/introduction/) article to learn more about using Neo4j and Docker. Alternatively, create a free graph database on [AuraDB](https://neo4j.com/product/auradb/).
+
+
 ### Usage
 Clone the crate you are interested in analyzing and make sure `rust-toolchain.toml` contains the fields below. Create the file if it doesn't exist.
 
@@ -33,6 +49,14 @@ Options:
   -p, --password <Neo4j password>  The Neo4j password
   -h, --help                       Print help
 ```
+
+For example, if you set up Neo4j locally, the command might look something like...
+
+```
+scampi --uri bolt://localhost:7687 --password Qwerty12!
+```
+
+Note that some crates require additional setup, such as packages that need to be installed. In many such cases, there will be an installation script or at least some setup instructions. Follow those instructions _before_ running Scampi to generate necessary build artifacts.
 
 ## Example Queries
 
