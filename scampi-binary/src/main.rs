@@ -26,7 +26,7 @@ fn main() {
     ];
 
     let mut command = Command::new("cargo")
-        .arg("check")
+        .arg("run")
         .arg("--keep-going")
         .env("RUSTC_WRAPPER", "scampi-driver")
         .envs(vars)

@@ -2,7 +2,7 @@ use neo4rs::{query, Graph, Query};
 use rustc_abi::ExternAbi;
 use rustc_hir::def::{DefKind, Res};
 use rustc_hir::intravisit::{walk_expr, walk_impl_item, walk_item, Visitor};
-use rustc_hir::{Expr, ExprKind, ItemKind};
+use rustc_hir::{Expr, ExprKind, FnRetTy, Impl, Item, ItemKind, Node};
 use rustc_middle::hir::nested_filter::OnlyBodies;
 use rustc_middle::ty::{TyCtxt, TyKind};
 
@@ -256,6 +256,57 @@ impl<'tcx> Visitor<'tcx> for Analyzer<'tcx> {
                 let fn_name = self.tcx.def_path_str(def_id);
                 let fn_span = self.tcx.def_span(def_id);
 
+                // let parent_impl_item = self.tcx.hir().expect_item(impl_item.owner_id.def_id);
+                // let ity = if let rustc_hir::ItemKind::Impl(imp) = parent_impl_item.kind {
+                //     imp.self_ty
+                // } else {
+                //     unreachable!("Parent of an ImplItem should always be an Impl block");
+                // };
+
+                let rty = if let FnRetTy::Return(ty) = sig.decl.output { Some(ty) } else { None };
+
+                debug!("{:#?}", impl_item);
+
+                let did = impl_item.owner_id.def_id.to_def_id();
+                // let impl_item_node = self.tcx.hir_node_by_def_id(did);
+
+                let sty = if let Some(parent_did) = self.tcx.impl_of_method(did) {
+                    let parent_node = self.tcx.hir_node_by_def_id(parent_did.as_local().unwrap());
+
+                    if let Node::Item(impl_block) = parent_node {
+                        if let ItemKind::Impl(_impl) = impl_block.kind {
+                            let sty = _impl.self_ty;
+                            Some(sty)
+                            // debug!("Inside of an impl block for {:?}", sty);
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                debug!("Self: {:?}", sty);
+                debug!("Returned: {:?}", rty);
+
+                let returns_self = match (rty, sty) {
+                    (Some(rty), Some(sty)) => {
+                        // Get the resolved types from the type checker
+                        let rty_resolved = self.tcx.type_of(self.tcx.);
+                        let sty_resolved = self.tcx.type_of(sty.hir_id.owner.def_id);
+                        
+                        debug!("self resolved: {:?}", sty_resolved);
+                        debug!("ret resolved: {:?}", rty_resolved);
+
+                        rty_resolved == sty_resolved
+                    }
+                    _ => false
+                };
+
+                debug!("returns self: {:?}", returns_self);
+
                 let params: Vec<ParamData> = sig
                     .decl
                     .inputs
@@ -265,6 +316,19 @@ impl<'tcx> Visitor<'tcx> for Analyzer<'tcx> {
                             .tcx
                             .type_of(hir_ty.hir_id.owner.to_def_id())
                             .skip_binder();
+
+                        if ty.is_mutable_ptr() && sig.header.is_safe() {
+                            // let returns_self = match (rty, self_ty) {
+                            //     (Some(rty), Some(sty)) => rty == sty,
+                            //     _ => false
+                            // };
+
+                            debug!("Self: {:?}", sty);
+                            debug!("Returned: {:?}", rty);
+
+                            self.tcx.dcx().span_warn(sig.span, "Constructor takes mutable pointer but is marked safe");
+                        }
+
                         ParamData::new(&ty)
                     })
                     .collect();
