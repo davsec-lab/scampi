@@ -30,11 +30,12 @@ impl Callbacks for AnalysisCallback {
         _compiler: &rustc_interface::interface::Compiler,
         tcx: rustc_middle::ty::TyCtxt<'tcx>,
     ) -> rustc_driver::Compilation {
-        let skip = ["tokio", "time", "rustix", "parquet", "build_script_build"];
+        let skip = ["tokio", "time", "rustix", "parquet", "build_script_build", "find_msvc_tools", "shlex", "cc"];
 
         if !skip.contains(&self.crate_name.as_ref()) {
             let mut analyzer = Analyzer::new(tcx, self.crate_name.clone());
             tcx.hir_visit_all_item_likes_in_crate(&mut analyzer);
+            analyzer.finalize();
         }
 
         rustc_driver::Compilation::Continue

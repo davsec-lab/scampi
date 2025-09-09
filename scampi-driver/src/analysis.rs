@@ -1,4 +1,4 @@
-use neo4rs::{query, Graph, Query};
+use neo4rs::{query, Graph, Query, Txn};
 use rustc_abi::ExternAbi;
 use rustc_hir::def::{DefKind, Res};
 use rustc_hir::intravisit::{walk_expr, walk_impl_item, walk_item, Visitor};
@@ -39,6 +39,10 @@ pub struct Analyzer<'tcx> {
 
     /// Stack of function definitions.
     caller_name: Vec<String>,
+
+    queries: Vec<Query>,
+
+    txn: Txn
 }
 
 impl<'tcx> Analyzer<'tcx> {
@@ -47,16 +51,24 @@ impl<'tcx> Analyzer<'tcx> {
         let password = std::env::var("SCAMPI_NEO4J_PASSWORD").unwrap();
 
         let rt = Runtime::new().unwrap();
+
         let graph = rt.block_on(Graph::new(uri, "neo4j", password)).unwrap();
+        let txn = rt.block_on(graph.start_txn()).unwrap();
 
         Self {
-            rt: Runtime::new().unwrap(),
+            rt,
             graph,
             tcx,
             crate_name,
             caller_name: vec![],
             loop_level: 0,
+            queries: vec![],
+            txn
         }
+    }
+
+    pub fn finalize(&mut self) {
+        self.commit_queries();
     }
 
     fn run_blocking_query(&mut self, query: Query) {
@@ -88,28 +100,38 @@ impl<'tcx> Analyzer<'tcx> {
         .param("safe", fn_sig.safe)
         .param("span", clean_span(fn_sig.span));
 
-        self.run_blocking_query(fn_query);
+        self.queries.push(fn_query);
 
         for (i, param) in fn_sig.params.iter().enumerate() {
-            let param_query =
-                query("MERGE (p:Param { ty: $ty, is_mutable_ptr: $is_mutable_ptr }) RETURN p")
-                    .param("ty", param.ty.clone())
-                    .param("is_mutable_ptr", param.is_mutable_ptr);
-
-            self.run_blocking_query(param_query);
-
-            let accepts_query = query(
-                "MATCH (f:Fn), (p:Param) \
-                    WHERE f.name = $fn_name AND p.ty = $ty \
-                    MERGE (f)-[r:ACCEPTS { i: $i }]->(p) \
-                    RETURN r",
-            )
-            .param("fn_name", fn_sig.name.clone())
+            let param_query = query("
+                MERGE (p:Param { ty: $ty, is_mutable_ptr: $is_mutable_ptr })
+                WITH p
+                MATCH (f:Fn)
+                WHERE f.name = $fn_name
+                MERGE (f)-[r:ACCEPTS { i: $i }]->(p)
+                RETURN p, r
+            ").param("fn_name", fn_sig.name.clone())
+            .param("is_mutable_ptr", param.is_mutable_ptr)
             .param("ty", param.ty.clone())
             .param("i", i as i32);
 
-            self.run_blocking_query(accepts_query);
+            self.queries.push(param_query);
         }
+
+        if self.queries.len() > 100 {
+            self.commit_queries();
+        }
+    }
+
+    fn commit_queries(&mut self) {
+        self.rt.block_on(self.txn.run_queries(self.queries.drain(..))).unwrap();
+
+        let old_txn = std::mem::replace(
+            &mut self.txn,
+            self.rt.block_on(self.graph.start_txn()).unwrap(),
+        );
+
+        self.rt.block_on(old_txn.commit()).unwrap();
     }
 
     fn visit_expr_call(&mut self, fun: &Expr, _args: &[Expr]) -> () {
@@ -169,9 +191,11 @@ impl<'tcx> Analyzer<'tcx> {
                                 .param("span", clean_span(fun.span))
                                 .param("loop_level", self.loop_level);
 
-                                let _ = self
-                                    .rt
-                                    .block_on(async { self.graph.run(relationship_query).await });
+                                self.queries.push(relationship_query);
+
+                                if self.queries.len() > 100 {
+                                    self.commit_queries();
+                                }
                             }
 
                             _ => warn!("Function wasn't an `FnDef`"),
@@ -248,109 +272,109 @@ impl<'tcx> Visitor<'tcx> for Analyzer<'tcx> {
         };
     }
 
-    fn visit_impl_item(&mut self, impl_item: &'tcx rustc_hir::ImplItem<'tcx>) -> Self::Result {
-        match impl_item.kind {
-            rustc_hir::ImplItemKind::Fn(sig, body) => {
-                let def_id = body.hir_id.owner.to_def_id();
+    // fn visit_impl_item(&mut self, impl_item: &'tcx rustc_hir::ImplItem<'tcx>) -> Self::Result {
+    //     match impl_item.kind {
+    //         rustc_hir::ImplItemKind::Fn(sig, body) => {
+    //             let def_id = body.hir_id.owner.to_def_id();
 
-                let fn_name = self.tcx.def_path_str(def_id);
-                let fn_span = self.tcx.def_span(def_id);
+    //             let fn_name = self.tcx.def_path_str(def_id);
+    //             let fn_span = self.tcx.def_span(def_id);
 
-                // let parent_impl_item = self.tcx.hir().expect_item(impl_item.owner_id.def_id);
-                // let ity = if let rustc_hir::ItemKind::Impl(imp) = parent_impl_item.kind {
-                //     imp.self_ty
-                // } else {
-                //     unreachable!("Parent of an ImplItem should always be an Impl block");
-                // };
+    //             // let parent_impl_item = self.tcx.hir().expect_item(impl_item.owner_id.def_id);
+    //             // let ity = if let rustc_hir::ItemKind::Impl(imp) = parent_impl_item.kind {
+    //             //     imp.self_ty
+    //             // } else {
+    //             //     unreachable!("Parent of an ImplItem should always be an Impl block");
+    //             // };
 
-                let rty = if let FnRetTy::Return(ty) = sig.decl.output { Some(ty) } else { None };
+    //             let rty = if let FnRetTy::Return(ty) = sig.decl.output { Some(ty) } else { None };
 
-                debug!("{:#?}", impl_item);
+    //             debug!("{:#?}", impl_item);
 
-                let did = impl_item.owner_id.def_id.to_def_id();
-                // let impl_item_node = self.tcx.hir_node_by_def_id(did);
+    //             let did = impl_item.owner_id.def_id.to_def_id();
+    //             // let impl_item_node = self.tcx.hir_node_by_def_id(did);
 
-                let sty = if let Some(parent_did) = self.tcx.impl_of_method(did) {
-                    let parent_node = self.tcx.hir_node_by_def_id(parent_did.as_local().unwrap());
+    //             let sty = if let Some(parent_did) = self.tcx.impl_of_method(did) {
+    //                 let parent_node = self.tcx.hir_node_by_def_id(parent_did.as_local().unwrap());
 
-                    if let Node::Item(impl_block) = parent_node {
-                        if let ItemKind::Impl(_impl) = impl_block.kind {
-                            let sty = _impl.self_ty;
-                            Some(sty)
-                            // debug!("Inside of an impl block for {:?}", sty);
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                };
+    //                 if let Node::Item(impl_block) = parent_node {
+    //                     if let ItemKind::Impl(_impl) = impl_block.kind {
+    //                         let sty = _impl.self_ty;
+    //                         Some(sty)
+    //                         // debug!("Inside of an impl block for {:?}", sty);
+    //                     } else {
+    //                         None
+    //                     }
+    //                 } else {
+    //                     None
+    //                 }
+    //             } else {
+    //                 None
+    //             };
 
-                debug!("Self: {:?}", sty);
-                debug!("Returned: {:?}", rty);
+    //             debug!("Self: {:?}", sty);
+    //             debug!("Returned: {:?}", rty);
 
-                let returns_self = match (rty, sty) {
-                    (Some(rty), Some(sty)) => {
-                        // Get the resolved types from the type checker
-                        let rty_resolved = self.tcx.type_of(self.tcx.);
-                        let sty_resolved = self.tcx.type_of(sty.hir_id.owner.def_id);
+    //             let returns_self = match (rty, sty) {
+    //                 (Some(rty), Some(sty)) => {
+    //                     // Get the resolved types from the type checker
+    //                     let rty_resolved = self.tcx.type_of(self.tcx.);
+    //                     let sty_resolved = self.tcx.type_of(sty.hir_id.owner.def_id);
                         
-                        debug!("self resolved: {:?}", sty_resolved);
-                        debug!("ret resolved: {:?}", rty_resolved);
+    //                     debug!("self resolved: {:?}", sty_resolved);
+    //                     debug!("ret resolved: {:?}", rty_resolved);
 
-                        rty_resolved == sty_resolved
-                    }
-                    _ => false
-                };
+    //                     rty_resolved == sty_resolved
+    //                 }
+    //                 _ => false
+    //             };
 
-                debug!("returns self: {:?}", returns_self);
+    //             debug!("returns self: {:?}", returns_self);
 
-                let params: Vec<ParamData> = sig
-                    .decl
-                    .inputs
-                    .iter()
-                    .map(|hir_ty| {
-                        let ty = self
-                            .tcx
-                            .type_of(hir_ty.hir_id.owner.to_def_id())
-                            .skip_binder();
+    //             let params: Vec<ParamData> = sig
+    //                 .decl
+    //                 .inputs
+    //                 .iter()
+    //                 .map(|hir_ty| {
+    //                     let ty = self
+    //                         .tcx
+    //                         .type_of(hir_ty.hir_id.owner.to_def_id())
+    //                         .skip_binder();
 
-                        if ty.is_mutable_ptr() && sig.header.is_safe() {
-                            // let returns_self = match (rty, self_ty) {
-                            //     (Some(rty), Some(sty)) => rty == sty,
-                            //     _ => false
-                            // };
+    //                     if ty.is_mutable_ptr() && sig.header.is_safe() {
+    //                         // let returns_self = match (rty, self_ty) {
+    //                         //     (Some(rty), Some(sty)) => rty == sty,
+    //                         //     _ => false
+    //                         // };
 
-                            debug!("Self: {:?}", sty);
-                            debug!("Returned: {:?}", rty);
+    //                         debug!("Self: {:?}", sty);
+    //                         debug!("Returned: {:?}", rty);
 
-                            self.tcx.dcx().span_warn(sig.span, "Constructor takes mutable pointer but is marked safe");
-                        }
+    //                         self.tcx.dcx().span_warn(sig.span, "Constructor takes mutable pointer but is marked safe");
+    //                     }
 
-                        ParamData::new(&ty)
-                    })
-                    .collect();
+    //                     ParamData::new(&ty)
+    //                 })
+    //                 .collect();
 
-                let fun_sig = FunSig {
-                    krate: self.crate_name.clone(),
-                    name: fn_name.clone(),
-                    span: fn_span,
-                    abi: sig.header.abi,
-                    safe: sig.header.is_safe(),
-                    params,
-                };
+    //             let fun_sig = FunSig {
+    //                 krate: self.crate_name.clone(),
+    //                 name: fn_name.clone(),
+    //                 span: fn_span,
+    //                 abi: sig.header.abi,
+    //                 safe: sig.header.is_safe(),
+    //                 params,
+    //             };
 
-                self.register_fn(fun_sig);
+    //             self.register_fn(fun_sig);
 
-                self.caller_name.push(fn_name);
+    //             self.caller_name.push(fn_name);
 
-                walk_impl_item(self, impl_item);
+    //             walk_impl_item(self, impl_item);
 
-                self.caller_name.pop();
-            }
-            _ => {}
-        };
-    }
+    //             self.caller_name.pop();
+    //         }
+    //         _ => {}
+    //     };
+    // }
 }
