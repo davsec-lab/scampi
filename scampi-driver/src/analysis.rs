@@ -98,8 +98,9 @@ impl<'tcx> Analyzer<'tcx> {
         };
 
         let fn_query = query(&format!(
-            "MERGE (f:Fn:{abi} {{name: $name, crate: $crate, safe: $safe, span: $span}}) RETURN f"
+            "MERGE (f:Fn:{abi} {{name: $name, crate: $crate, safe: $safe, abi: $abi, span: $span}}) RETURN f"
         ))
+        .param("abi", abi)
         .param("name", fn_sig.name.clone())
         .param("crate", fn_sig.krate.clone())
         .param("safe", fn_sig.safe)
