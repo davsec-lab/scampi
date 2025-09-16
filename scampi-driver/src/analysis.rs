@@ -1,8 +1,9 @@
 use neo4rs::{query, Graph, Query, Txn};
 use rustc_abi::ExternAbi;
 use rustc_hir::def::{DefKind, Res};
+use rustc_hir::def_id::DefId;
 use rustc_hir::intravisit::{walk_expr, walk_impl_item, walk_item, Visitor};
-use rustc_hir::{Expr, ExprKind, FnRetTy, Impl, Item, ItemKind, Node};
+use rustc_hir::{Expr, ExprKind, ItemKind};
 use rustc_middle::hir::nested_filter::OnlyBodies;
 use rustc_middle::ty::{TyCtxt, TyKind};
 
@@ -11,6 +12,8 @@ use rustc_span::Span;
 use tokio::runtime::Runtime;
 
 use crate::data::{clean_span, ParamData};
+
+const MAX_QUERY_COUNT: usize = 1000;
 
 struct FunSig {
     krate: String,
@@ -41,19 +44,17 @@ pub struct Analyzer<'tcx> {
     caller_name: Vec<String>,
 
     queries: Vec<Query>,
-
-    txn: Txn
 }
 
 impl<'tcx> Analyzer<'tcx> {
     pub fn new(tcx: TyCtxt<'tcx>, crate_name: String) -> Self {
         let uri = std::env::var("SCAMPI_NEO4J_URI").unwrap();
+        let username = std::env::var("SCAMPI_NEO4J_USERNAME").unwrap();
         let password = std::env::var("SCAMPI_NEO4J_PASSWORD").unwrap();
 
         let rt = Runtime::new().unwrap();
 
-        let graph = rt.block_on(Graph::new(uri, "neo4j", password)).unwrap();
-        let txn = rt.block_on(graph.start_txn()).unwrap();
+        let graph = rt.block_on(Graph::new(uri, username, password)).unwrap();
 
         Self {
             rt,
@@ -62,13 +63,17 @@ impl<'tcx> Analyzer<'tcx> {
             crate_name,
             caller_name: vec![],
             loop_level: 0,
-            queries: vec![],
-            txn
+            queries: vec![]
         }
     }
 
+    pub fn submit_query(&mut self, query: Query) {
+        // self.queries.push(query);
+        self.run_blocking_query(query);
+    }
+
     pub fn finalize(&mut self) {
-        self.commit_queries();
+        // self.commit_queries();
     }
 
     fn run_blocking_query(&mut self, query: Query) {
@@ -100,7 +105,8 @@ impl<'tcx> Analyzer<'tcx> {
         .param("safe", fn_sig.safe)
         .param("span", clean_span(fn_sig.span));
 
-        self.queries.push(fn_query);
+        // self.queries.push(fn_query);
+        self.submit_query(fn_query);
 
         for (i, param) in fn_sig.params.iter().enumerate() {
             let param_query = query("
@@ -115,23 +121,108 @@ impl<'tcx> Analyzer<'tcx> {
             .param("ty", param.ty.clone())
             .param("i", i as i32);
 
-            self.queries.push(param_query);
+            // self.queries.push(param_query);
+            self.submit_query(param_query);
         }
 
-        if self.queries.len() > 100 {
-            self.commit_queries();
-        }
+        // if self.queries.len() > MAX_QUERY_COUNT {
+        //     self.commit_queries();
+        // }
     }
 
     fn commit_queries(&mut self) {
-        self.rt.block_on(self.txn.run_queries(self.queries.drain(..))).unwrap();
+        let mut txn = self.rt.block_on(self.graph.start_txn()).unwrap();
+        
+        self.rt.block_on(txn.run_queries(self.queries.drain(..))).unwrap();
 
-        let old_txn = std::mem::replace(
-            &mut self.txn,
-            self.rt.block_on(self.graph.start_txn()).unwrap(),
-        );
+        self.rt.block_on(txn.commit()).unwrap();
+    }
 
-        self.rt.block_on(old_txn.commit()).unwrap();
+    fn canonical_path(&self, def_id: DefId) -> String {
+        let relative_path = self.tcx.def_path_str(def_id);
+
+        // Get the *full* path, including the local crate name
+        let full_path = if def_id.is_local() {
+            // It's a local DefId, so we need to add the crate name
+            let crate_name = self.tcx.crate_name(def_id.krate).to_string();
+            
+            if relative_path.is_empty() {
+                // This handles the edge case of the crate root itself
+                crate_name
+            } else {
+                format!("{}::{}", crate_name, relative_path)
+            }
+        } else {
+            // It's external, so def_path_str already included the crate name
+            relative_path
+        };
+
+        full_path
+    }
+
+    fn visit_expr_method_call(&mut self, hir_id: rustc_hir::HirId, receiver: &Expr, _args: &[Expr]) -> () {
+        let typeck_results = self.tcx.typeck(hir_id.owner.def_id);
+        let (def_kind, def_id) = typeck_results.type_dependent_def(hir_id).unwrap();
+
+        match def_kind {
+            DefKind::AssocFn => {
+                let fn_name = self.canonical_path(def_id);
+                let fn_span = self.tcx.def_span(def_id);
+
+                // Get the method's type from the def_id
+                let method_ty = self.tcx.type_of(def_id).skip_binder();
+                match method_ty.kind() {
+                    TyKind::FnDef(..) => {
+                        let binder = method_ty.fn_sig(self.tcx);
+                        let fn_sig = binder.skip_binder();
+
+                        if self.caller_name.is_empty() {
+                            debug!("NO CALLER! At span {}", clean_span(fn_span));
+                            return;
+                        }
+
+                        let params: Vec<ParamData> = fn_sig
+                            .inputs()
+                            .iter()
+                            .map(|ty| ParamData::new(ty))
+                            .collect();
+
+                        let fun_sig = FunSig {
+                            krate: self.tcx.crate_name(def_id.krate).to_string(),
+                            name: fn_name.clone(),
+                            span: fn_span,
+                            abi: fn_sig.abi,
+                            safe: fn_sig.safety.is_safe(),
+                            params,
+                        };
+
+                        self.register_fn(fun_sig);
+
+                        let relationship_query = query(
+                            "MATCH (a:Fn), (b:Fn) \
+                            WHERE a.name = $caller AND b.name = $callee \
+                            MERGE (a)-[r:CALLS { span: $span, loop_level: $loop_level }]->(b) \
+                            RETURN r",
+                        )
+                        .param("caller", self.caller_name.last().unwrap().clone())
+                        .param("callee", fn_name.clone())
+                        .param("span", clean_span(receiver.span))
+                        .param("loop_level", self.loop_level);
+
+                        // self.queries.push(relationship_query);
+                        self.submit_query(relationship_query);
+
+                        // if self.queries.len() > MAX_QUERY_COUNT {
+                        //     self.commit_queries();
+                        // }
+                    }
+
+                    _ => warn!("Method wasn't an `FnDef`"),
+                }
+            }
+
+            _ => todo!(),
+        }
     }
 
     fn visit_expr_call(&mut self, fun: &Expr, _args: &[Expr]) -> () {
@@ -149,7 +240,7 @@ impl<'tcx> Analyzer<'tcx> {
 
             if let Res::Def(def_kind, def_id) = typeck_results.qpath_res(&qpath, fun.hir_id) {
                 if def_kind == DefKind::Fn {
-                    let fn_name = self.tcx.def_path_str(def_id);
+                    let fn_name = self.canonical_path(def_id);
                     let fn_span = self.tcx.def_span(def_id);
 
                     match typeck_results.expr_ty_opt(fun) {
@@ -191,11 +282,12 @@ impl<'tcx> Analyzer<'tcx> {
                                 .param("span", clean_span(fun.span))
                                 .param("loop_level", self.loop_level);
 
-                                self.queries.push(relationship_query);
+                                // self.queries.push(relationship_query);
+                                self.submit_query(relationship_query);
 
-                                if self.queries.len() > 100 {
-                                    self.commit_queries();
-                                }
+                                // if self.queries.len() > MAX_QUERY_COUNT {
+                                //     self.commit_queries();
+                                // }
                             }
 
                             _ => warn!("Function wasn't an `FnDef`"),
@@ -218,6 +310,7 @@ impl<'tcx> Visitor<'tcx> for Analyzer<'tcx> {
 
     fn visit_expr(&mut self, expr: &'tcx Expr<'tcx>) -> Self::Result {
         match expr.kind {
+            ExprKind::MethodCall(_path, receiver, args, _span) => self.visit_expr_method_call(expr.hir_id, receiver, args),
             ExprKind::Call(fun, args) => self.visit_expr_call(fun, args),
             ExprKind::Loop(_, _, _, _) => {
                 self.loop_level += 1;
@@ -235,7 +328,7 @@ impl<'tcx> Visitor<'tcx> for Analyzer<'tcx> {
             ItemKind::Fn { sig, body, .. } => {
                 let def_id = body.hir_id.owner.to_def_id();
 
-                let fn_name = self.tcx.def_path_str(def_id);
+                let fn_name = self.canonical_path(def_id);
                 let fn_span = self.tcx.def_span(def_id);
 
                 let params: Vec<ParamData> = sig
@@ -272,109 +365,109 @@ impl<'tcx> Visitor<'tcx> for Analyzer<'tcx> {
         };
     }
 
-    // fn visit_impl_item(&mut self, impl_item: &'tcx rustc_hir::ImplItem<'tcx>) -> Self::Result {
-    //     match impl_item.kind {
-    //         rustc_hir::ImplItemKind::Fn(sig, body) => {
-    //             let def_id = body.hir_id.owner.to_def_id();
+    fn visit_impl_item(&mut self, impl_item: &'tcx rustc_hir::ImplItem<'tcx>) -> Self::Result {
+        match impl_item.kind {
+            rustc_hir::ImplItemKind::Fn(sig, body) => {
+                let def_id = body.hir_id.owner.to_def_id();
 
-    //             let fn_name = self.tcx.def_path_str(def_id);
-    //             let fn_span = self.tcx.def_span(def_id);
+                let fn_name = self.canonical_path(def_id);
+                let fn_span = self.tcx.def_span(def_id);
 
-    //             // let parent_impl_item = self.tcx.hir().expect_item(impl_item.owner_id.def_id);
-    //             // let ity = if let rustc_hir::ItemKind::Impl(imp) = parent_impl_item.kind {
-    //             //     imp.self_ty
-    //             // } else {
-    //             //     unreachable!("Parent of an ImplItem should always be an Impl block");
-    //             // };
+                // let parent_impl_item = self.tcx.hir().expect_item(impl_item.owner_id.def_id);
+                // let ity = if let rustc_hir::ItemKind::Impl(imp) = parent_impl_item.kind {
+                //     imp.self_ty
+                // } else {
+                //     unreachable!("Parent of an ImplItem should always be an Impl block");
+                // };
 
-    //             let rty = if let FnRetTy::Return(ty) = sig.decl.output { Some(ty) } else { None };
+                // let rty = if let FnRetTy::Return(ty) = sig.decl.output { Some(ty) } else { None };
 
-    //             debug!("{:#?}", impl_item);
+                // debug!("{:#?}", impl_item);
 
-    //             let did = impl_item.owner_id.def_id.to_def_id();
-    //             // let impl_item_node = self.tcx.hir_node_by_def_id(did);
+                // let did = impl_item.owner_id.def_id.to_def_id();
+                // // let impl_item_node = self.tcx.hir_node_by_def_id(did);
 
-    //             let sty = if let Some(parent_did) = self.tcx.impl_of_method(did) {
-    //                 let parent_node = self.tcx.hir_node_by_def_id(parent_did.as_local().unwrap());
+                // let sty = if let Some(parent_did) = self.tcx.impl_of_method(did) {
+                //     let parent_node = self.tcx.hir_node_by_def_id(parent_did.as_local().unwrap());
 
-    //                 if let Node::Item(impl_block) = parent_node {
-    //                     if let ItemKind::Impl(_impl) = impl_block.kind {
-    //                         let sty = _impl.self_ty;
-    //                         Some(sty)
-    //                         // debug!("Inside of an impl block for {:?}", sty);
-    //                     } else {
-    //                         None
-    //                     }
-    //                 } else {
-    //                     None
-    //                 }
-    //             } else {
-    //                 None
-    //             };
+                //     if let Node::Item(impl_block) = parent_node {
+                //         if let ItemKind::Impl(_impl) = impl_block.kind {
+                //             let sty = _impl.self_ty;
+                //             Some(sty)
+                //             // debug!("Inside of an impl block for {:?}", sty);
+                //         } else {
+                //             None
+                //         }
+                //     } else {
+                //         None
+                //     }
+                // } else {
+                //     None
+                // };
 
-    //             debug!("Self: {:?}", sty);
-    //             debug!("Returned: {:?}", rty);
+                // debug!("Self: {:?}", sty);
+                // debug!("Returned: {:?}", rty);
 
-    //             let returns_self = match (rty, sty) {
-    //                 (Some(rty), Some(sty)) => {
-    //                     // Get the resolved types from the type checker
-    //                     let rty_resolved = self.tcx.type_of(self.tcx.);
-    //                     let sty_resolved = self.tcx.type_of(sty.hir_id.owner.def_id);
+                // let returns_self = match (rty, sty) {
+                //     (Some(rty), Some(sty)) => {
+                //         // Get the resolved types from the type checker
+                //         let rty_resolved = self.tcx.type_of(self.tcx.);
+                //         let sty_resolved = self.tcx.type_of(sty.hir_id.owner.def_id);
                         
-    //                     debug!("self resolved: {:?}", sty_resolved);
-    //                     debug!("ret resolved: {:?}", rty_resolved);
+                //         debug!("self resolved: {:?}", sty_resolved);
+                //         debug!("ret resolved: {:?}", rty_resolved);
 
-    //                     rty_resolved == sty_resolved
-    //                 }
-    //                 _ => false
-    //             };
+                //         rty_resolved == sty_resolved
+                //     }
+                //     _ => false
+                // };
 
-    //             debug!("returns self: {:?}", returns_self);
+                // debug!("returns self: {:?}", returns_self);
 
-    //             let params: Vec<ParamData> = sig
-    //                 .decl
-    //                 .inputs
-    //                 .iter()
-    //                 .map(|hir_ty| {
-    //                     let ty = self
-    //                         .tcx
-    //                         .type_of(hir_ty.hir_id.owner.to_def_id())
-    //                         .skip_binder();
+                let params: Vec<ParamData> = sig
+                    .decl
+                    .inputs
+                    .iter()
+                    .map(|hir_ty| {
+                        let ty = self
+                            .tcx
+                            .type_of(hir_ty.hir_id.owner.to_def_id())
+                            .skip_binder();
 
-    //                     if ty.is_mutable_ptr() && sig.header.is_safe() {
-    //                         // let returns_self = match (rty, self_ty) {
-    //                         //     (Some(rty), Some(sty)) => rty == sty,
-    //                         //     _ => false
-    //                         // };
+                        // if ty.is_mutable_ptr() && sig.header.is_safe() {
+                        //     // let returns_self = match (rty, self_ty) {
+                        //     //     (Some(rty), Some(sty)) => rty == sty,
+                        //     //     _ => false
+                        //     // };
 
-    //                         debug!("Self: {:?}", sty);
-    //                         debug!("Returned: {:?}", rty);
+                        //     debug!("Self: {:?}", sty);
+                        //     debug!("Returned: {:?}", rty);
 
-    //                         self.tcx.dcx().span_warn(sig.span, "Constructor takes mutable pointer but is marked safe");
-    //                     }
+                        //     self.tcx.dcx().span_warn(sig.span, "Constructor takes mutable pointer but is marked safe");
+                        // }
 
-    //                     ParamData::new(&ty)
-    //                 })
-    //                 .collect();
+                        ParamData::new(&ty)
+                    })
+                    .collect();
 
-    //             let fun_sig = FunSig {
-    //                 krate: self.crate_name.clone(),
-    //                 name: fn_name.clone(),
-    //                 span: fn_span,
-    //                 abi: sig.header.abi,
-    //                 safe: sig.header.is_safe(),
-    //                 params,
-    //             };
+                let fun_sig = FunSig {
+                    krate: self.crate_name.clone(),
+                    name: fn_name.clone(),
+                    span: fn_span,
+                    abi: sig.header.abi,
+                    safe: sig.header.is_safe(),
+                    params,
+                };
 
-    //             self.register_fn(fun_sig);
+                self.register_fn(fun_sig);
 
-    //             self.caller_name.push(fn_name);
+                self.caller_name.push(fn_name);
 
-    //             walk_impl_item(self, impl_item);
+                walk_impl_item(self, impl_item);
 
-    //             self.caller_name.pop();
-    //         }
-    //         _ => {}
-    //     };
-    // }
+                self.caller_name.pop();
+            }
+            _ => {}
+        };
+    }
 }
