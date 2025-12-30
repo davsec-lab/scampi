@@ -11,7 +11,7 @@ use log::{debug, warn};
 use rustc_span::Span;
 use tokio::runtime::Runtime;
 
-use crate::data::{clean_span, ParamData};
+use crate::data::{absolutify, clean_span, ParamData};
 
 const MAX_QUERY_COUNT: usize = 1000;
 
@@ -97,14 +97,23 @@ impl<'tcx> Analyzer<'tcx> {
             _ => "Other",
         };
 
+        let source_map = self.tcx.sess.source_map();
+        let lo = source_map.lookup_char_pos(fn_sig.span.lo());
+
+        let file = absolutify(lo.file.name.prefer_local().to_string_lossy().to_string());
+        let line = lo.line;
+        let column = lo.col_display + 1;
+
         let fn_query = query(&format!(
-            "MERGE (f:Fn:{abi} {{name: $name, crate: $crate, safe: $safe, abi: $abi, span: $span}}) RETURN f"
+            "MERGE (f:Fn:{abi} {{name: $name, crate: $crate, safe: $safe, abi: $abi, file: $file, line: $line, column: $column}}) RETURN f"
         ))
         .param("abi", abi)
         .param("name", fn_sig.name.clone())
         .param("crate", fn_sig.krate.clone())
         .param("safe", fn_sig.safe)
-        .param("span", clean_span(fn_sig.span));
+        .param("file", file)
+        .param("line", line as i64)
+        .param("column", column as i64);
 
         // self.queries.push(fn_query);
         self.submit_query(fn_query);
