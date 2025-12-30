@@ -1,5 +1,9 @@
 <div align="center">
-  <img src="assets/ScampiLight.png" style="width: 200px; max-width: 100%"/>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/ScampiDark.png">
+    <source media="(prefers-color-scheme: light)" srcset="assets/ScampiLight.png">
+    <img alt="Scampi" src="assets/ScampiLight.png" style="width: 250px;">
+  </picture>
 </div>
 
 ## Getting Started

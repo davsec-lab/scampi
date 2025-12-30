@@ -11,6 +11,10 @@ struct Args {
     #[arg(short, long, value_name = "Neo4j URI")]
     uri: String,
 
+    /// The Neo4j username.
+    #[arg(short, long, value_name = "Neo4j username")]
+    username: String,
+
     /// The Neo4j password.
     #[arg(short, long, value_name = "Neo4j password")]
     password: String,
@@ -22,6 +26,7 @@ fn main() {
     let vars = vec![
         ("SCAMPI_LOG_LEVEL", "DEBUG"),
         ("SCAMPI_NEO4J_URI", &args.uri),
+        ("SCAMPI_NEO4J_USERNAME", &args.username),
         ("SCAMPI_NEO4J_PASSWORD", &args.password),
     ];
 
